@@ -19,9 +19,24 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_USER="$(id -un)"
 PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
 
+# Already root (the common case on a fresh Aliyun image) needs no sudo, and
+# minimal images do not always ship it. Only reach for sudo when we are not
+# root, and fail with a clear message if it is needed but missing.
+if [ "$(id -u)" -eq 0 ]; then
+    SUDO=""
+elif command -v sudo > /dev/null 2>&1; then
+    SUDO="sudo"
+else
+    echo "ERROR: this script needs root to write a systemd unit, but you are" >&2
+    echo "running as '${RUN_USER}' and sudo is not installed." >&2
+    echo "Log in as root and run it again, or install sudo first." >&2
+    exit 1
+fi
+
 echo "Project directory : ${PROJECT_DIR}"
 echo "Run as user       : ${RUN_USER}"
 echo "Python            : ${PYTHON_BIN}"
+echo "Privilege         : ${SUDO:-already root}"
 echo
 
 # --- Preflight checks -------------------------------------------------------
@@ -65,9 +80,9 @@ echo
 
 # --- Write the unit file ----------------------------------------------------
 
-echo "Writing ${UNIT_PATH} (requires sudo)..."
+echo "Writing ${UNIT_PATH}..."
 
-sudo tee "${UNIT_PATH}" > /dev/null <<UNIT
+${SUDO} tee "${UNIT_PATH}" > /dev/null <<UNIT
 [Unit]
 Description=Notion Deep Research Agent
 After=network-online.target
@@ -92,20 +107,20 @@ UNIT
 
 echo "Reloading systemd and starting the service..."
 
-sudo systemctl daemon-reload
-sudo systemctl enable "${SERVICE_NAME}"
-sudo systemctl restart "${SERVICE_NAME}"
+${SUDO} systemctl daemon-reload
+${SUDO} systemctl enable "${SERVICE_NAME}"
+${SUDO} systemctl restart "${SERVICE_NAME}"
 
 sleep 3
 
 echo
 echo "=============================================="
-sudo systemctl status "${SERVICE_NAME}" --no-pager --lines=15 || true
+${SUDO} systemctl status "${SERVICE_NAME}" --no-pager --lines=15 || true
 echo "=============================================="
 echo
 echo "Done. Useful commands:"
 echo
 echo "  Live logs   : journalctl -u ${SERVICE_NAME} -f"
-echo "  Restart     : sudo systemctl restart ${SERVICE_NAME}"
-echo "  Stop        : sudo systemctl stop ${SERVICE_NAME}"
-echo "  Disable     : sudo systemctl disable --now ${SERVICE_NAME}"
+echo "  Restart     : ${SUDO} systemctl restart ${SERVICE_NAME}"
+echo "  Stop        : ${SUDO} systemctl stop ${SERVICE_NAME}"
+echo "  Disable     : ${SUDO} systemctl disable --now ${SERVICE_NAME}"
