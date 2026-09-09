@@ -2,7 +2,7 @@
 name = "deep-research-agent"
 version = "0.1.0"
 description = "Notion-driven deep research agent that writes structured study notes"
-readme = "README_deep_research_agent.md"
+readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "deepagents>=0.6.12",
