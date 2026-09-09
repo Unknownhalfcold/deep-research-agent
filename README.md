@@ -478,104 +478,135 @@ update_task_status()
 
 ## 11. 部署到阿里云 ECS：手动运行
 
-登录 ECS：
+整个流程在服务器上跑，**本地电脑不参与、可以关机**：
 
-```bash
-ssh root@你的服务器IP
+```text
+手机 Notion 新建任务 (Status = Todo)
+        ↓
+ECS 上常驻的 notion_worker.py 每 60 秒查一次 Notion API
+        ↓
+ECS 自己调用 DeepSeek + Tavily 完成研究
+        ↓
+写回 Notion 页面正文
+        ↓
+手机刷新 Notion 就能看到笔记
 ```
 
-安装基础环境：
+### 11.1 登录 ECS
+
+```bash
+ssh root@你的服务器公网IP
+```
+
+公网 IP 在阿里云控制台 → 云服务器 ECS → 实例列表里能看到。
+
+登录后命令提示符会显示 `root@iZxxxxx:~#`，`@` 前面就是**当前用户名**（通常是 `root`，有些镜像是 `ecs-user`）。后面的部署脚本会自动读取它，你不需要记。
+
+### 11.2 安装 git 和 uv
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+sudo apt install -y git curl
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.bashrc
 ```
 
-拉取项目：
+**为什么用 uv 而不是 apt 装 Python**：本项目要求 Python 3.13，而 Ubuntu 22.04 自带 3.10、24.04 自带 3.12，`apt` 装不到 3.13。uv 会自动下载并管理正确的 Python 版本，还能按 `uv.lock` 精确还原依赖，和你本地环境完全一致。
+
+验证：
 
 ```bash
-git clone 你的GitHub仓库地址
+uv --version
+```
+
+### 11.3 拉取项目
+
+```bash
+git clone https://github.com/Unknownhalfcold/deep-research-agent.git
 cd deep-research-agent
 ```
 
-创建虚拟环境：
+现在你所在的这个目录，就是我说的**项目路径**（用 `pwd` 可以打印出来，比如 `/root/deep-research-agent`）。同样，部署脚本会自动检测，你不用手动填。
+
+### 11.4 创建环境并安装依赖
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+uv venv --python 3.13
+uv sync
 ```
 
-安装依赖：
+uv 会自己下载 Python 3.13，在 `.venv/` 里建好环境并装好全部依赖。
+
+### 11.5 创建 `.env`
+
+`.env` **不在 Git 里**（里面是 API key，绝不能提交），所以 clone 下来是没有的，必须在服务器上重新建一份：
 
 ```bash
-pip install -r requirements.txt
-```
-
-创建 `.env`：
-
-```bash
+cp .env.example .env
 nano .env
 ```
 
-写入：
+填入真实的 key：
 
 ```env
-DEEPSEEK_API_KEY=xxx
-TAVILY_API_KEY=xxx
-NOTION_API_KEY=xxx
-NOTION_TASK_DATABASE_ID=xxx
+DEEPSEEK_API_KEY=你的key
+TAVILY_API_KEY=你的key
+NOTION_API_KEY=你的key
+NOTION_TASK_DATABASE_ID=你的data source id
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ```
 
-测试（先用 `--once` 确认单条任务能跑通，再交给 systemd 长期运行）：
+nano 里保存退出：`Ctrl + O` → 回车 → `Ctrl + X`。
+
+### 11.6 先手动跑一次
+
+在交给 systemd 之前，**一定先手动确认能跑通**。否则服务会在后台不断重启失败，日志很难看。
+
+先在手机或电脑的 Notion 里建一条 `Status = Todo` 的任务，然后：
 
 ```bash
-python notion_worker.py --once
+.venv/bin/python notion_worker.py --once
 ```
+
+`--once` 表示处理一条任务就退出。看到 `Task completed successfully.` 并且 Notion 页面里出现了笔记，就说明成功了。
 
 ---
 
 ## 12. 部署到阿里云 ECS：systemd 后台运行
 
-确认手动运行成功后，再配置后台服务。
+确认第 11.6 步手动运行成功后，再配置后台服务。
 
-编辑服务文件：
+systemd 是 Linux 的服务管理器。把 worker 交给它之后，进程会开机自启、崩溃自动重启、你退出 SSH 也不会被杀掉。
+
+### 12.1 一条命令安装
+
+项目里带了部署脚本，**它会自动检测当前用户名和项目路径**，不需要你手动改任何配置：
 
 ```bash
-sudo nano /etc/systemd/system/notion-agent.service
+bash deploy/install_service.sh
 ```
 
-写入：
-
-```ini
-[Unit]
-Description=Notion Deep Research Agent
-After=network.target
-
-[Service]
-WorkingDirectory=/home/ecs-user/deep-research-agent
-ExecStart=/home/ecs-user/deep-research-agent/.venv/bin/python /home/ecs-user/deep-research-agent/notion_worker.py
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-把下面路径替换成服务器真实路径：
+脚本做的事：
 
 ```text
-/home/ecs-user/deep-research-agent
+1. 检查 .venv 和 .env 是否存在，缺了就明确报错并告诉你怎么补
+2. 检查 .env 里的 key 能否正常读取
+3. 用检测到的用户名和路径生成 /etc/systemd/system/notion-agent.service
+4. daemon-reload、设置开机自启、启动服务
+5. 打印服务状态
 ```
 
-启动服务：
+看到 `Active: active (running)` 就成功了。
+
+注意服务用的是**轮询模式**（`ExecStart` 不带 `--once`），会一直运行；带了 `--once` 的话跑一次就退出，systemd 会不停重启它。
+
+### 12.2 日常运维命令
+
+查看实时日志（最常用，`Ctrl + C` 退出查看，不影响服务运行）：
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl start notion-agent
-sudo systemctl enable notion-agent
+journalctl -u notion-agent -f
 ```
 
 查看状态：
@@ -584,23 +615,36 @@ sudo systemctl enable notion-agent
 sudo systemctl status notion-agent
 ```
 
-查看实时日志：
+改完代码后重启：
 
 ```bash
-journalctl -u notion-agent -f
-```
-
-重启服务：
-
-```bash
+git pull
 sudo systemctl restart notion-agent
 ```
 
-停止服务：
+停止 / 彻底关闭开机自启：
 
 ```bash
 sudo systemctl stop notion-agent
+sudo systemctl disable --now notion-agent
 ```
+
+### 12.3 服务起不来时怎么排查
+
+先看日志，**报错原因一定在里面**：
+
+```bash
+journalctl -u notion-agent -n 50 --no-pager
+```
+
+常见原因：
+
+| 日志里的现象 | 原因 | 解决 |
+|---|---|---|
+| `RuntimeError: ... is not set` | `.env` 没建或 key 填错 | 回到 11.5 |
+| `No such file or directory: .venv/bin/python` | 虚拟环境没建好 | 回到 11.4 |
+| 不停 `Started` / `Failed` 循环 | 启动就崩，被 `Restart=always` 反复拉起 | 先 `sudo systemctl stop notion-agent`，再手动 `.venv/bin/python notion_worker.py --once` 看完整报错 |
+| `SSL: UNEXPECTED_EOF_WHILE_READING` | 服务器网络到 Notion/DeepSeek 不通 | 见 13.4，考虑换香港/新加坡地域 |
 
 ---
 

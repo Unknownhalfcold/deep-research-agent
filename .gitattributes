@@ -1,0 +1,8 @@
+# Shell scripts must keep LF endings. A CRLF shebang makes Linux fail with
+# "bad interpreter: /usr/bin/env bash^M", and this repo is edited on Windows
+# (where core.autocrlf=true would otherwise rewrite them) but run on Linux.
+*.sh text eol=lf
+
+# Same reasoning for files consumed by Linux tooling.
+.env.example text eol=lf
+*.service text eol=lf
